@@ -6,7 +6,7 @@
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
 ;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13"))
-;; Version: 0.3-pre
+;; Version: 0.4
 ;; URL: https://github.com/alphapapa/listen.el
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -99,7 +99,8 @@ Interactively, uses the default player."
    (list (listen--player)))
   (delete-process (listen-player-process player))
   (when (eq player listen-player)
-    (setf listen-player nil)))
+    (setf listen-player nil))
+  (listen-mode--update))
 
 (declare-function listen-queue-next "listen-queue")
 (defun listen-next (player)
@@ -194,9 +195,7 @@ command with completion."
 
 (defun listen-mode-lighter ()
   "Return lighter for `listen-mode'."
-  (cl-labels ((format-time (seconds)
-                (format-seconds "%h:%z%.2m:%.2s" seconds))
-              (format-track ()
+  (cl-labels ((format-track ()
                 (when-let ((info (listen--info listen-player))
                            ;; Sometimes when paused/stopped, the artist and/or
                            ;; title are nil even if info isn't, so we must
@@ -217,11 +216,11 @@ command with completion."
                (list (format-status) " " (format-track)
                      " ("
                      (pcase listen-lighter-format
-                       ('remaining (concat "-" (format-time (- (listen--length listen-player)
-                                                               (listen--elapsed listen-player)))))
-                       (_ (concat (format-time (listen--elapsed listen-player))
+                       ('remaining (concat "-" (listen-format-seconds (- (listen--length listen-player)
+                                                                         (listen--elapsed listen-player)))))
+                       (_ (concat (listen-format-seconds (listen--elapsed listen-player))
                                   "/"
-                                  (format-time (listen--length listen-player)))))
+                                  (listen-format-seconds (listen--length listen-player)))))
                      ") ")
              '("■ ")))))
 
@@ -270,8 +269,15 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
 
 (require 'transient)
 
+(declare-function listen-queue "listen-queue")
+(declare-function listen-queue-shuffle "listen-queue")
+
+;; It seems that autoloading the transient prefix command doesn't work
+;; as expected, so we'll try this workaround.
 ;;;###autoload
-(transient-define-prefix listen ()
+(defalias 'listen #'listen-menu)
+
+(transient-define-prefix listen-menu ()
   "Show Listen menu."
   :refresh-suffixes t
   [["Listen"
@@ -280,7 +286,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
       (if listen-player
           (concat "Listening: " (listen-mode-lighter))
         "Not listening"))
-    ("q" "Quit" listen-quit)]]
+    ("Q" "Quit" listen-quit)]]
 
   [["Player"
     ("SPC" "Pause" listen-pause)
@@ -305,9 +311,11 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
                 (let ((player (listen--player)))
                   (listen-volume player (min 100 (+ (listen--volume player) 5)))))
      :transient t)]
-   ["Library"
-    ("Lf" "Library (from files)" listen-library)
-    ("Lm" "Library (from MPD)" listen-library-from-mpd)]]
+   ["Library view"
+    ("lf" "from files" listen-library)
+    ("lm" "from MPD" listen-library-from-mpd)
+    ("lq" "from queue" listen-library-from-queue)
+    ("lp" "from playlist file" listen-library-from-playlist-file)]]
 
   [["Queue mode"
     :description
@@ -318,29 +326,40 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
                   (cl-position (listen-queue-current queue) (listen-queue-tracks queue))
                   (length (listen-queue-tracks queue)))
         "No queue"))
-    ("Q" "Show" listen-queue
+    ("qc" "View current" (lambda ()
+                           "View current queue."
+                           (interactive)
+                           (listen-queue (map-elt (listen-player-etc (listen--player)) :queue)))
+     :if (lambda ()
+           (map-elt (listen-player-etc (listen--player)) :queue))
      :transient t)
-    ("P" "Play another queue" listen-queue-play
+    ("qq" "View another" listen-queue
      :transient t)
-    ("N" "New" listen-queue-new
+    ("qp" "Play another queue" listen-queue-play
      :transient t)
-    ("D" "Discard" listen-queue-discard
+    ("qn" "New" listen-queue-new
+     :transient t)
+    ("qD" "Discard" listen-queue-discard
      :transient t)]
    ["Tracks"
-    ("A" "Add files" listen-queue-add-files
+    ("qaf" "Add files" listen-queue-add-files
      :transient t)
-    ("M" "Add files from MPD" listen-queue-add-from-mpd
+    ("qam" "Add from MPD" listen-queue-add-from-mpd
      :transient t)
-    ("T" "Select track" (lambda ()
-                          "Call `listen-queue-play' with prefix."
-                          (interactive)
-                          (let ((current-prefix-arg '(4)))
-                            (call-interactively #'listen-queue-play)))
+    ("qap" "Add from playlist file" listen-queue-add-from-playlist-file
      :transient t)
-    ("S" "Shuffle" (lambda ()
-                     "Shuffle queue."
-                     (interactive)
-                     (call-interactively #'listen-queue-shuffle))
+    ("qt" "Play track" (lambda ()
+                         "Call `listen-queue-play' with prefix."
+                         (interactive)
+                         (let ((current-prefix-arg '(4)))
+                           (call-interactively #'listen-queue-play)))
+     :transient t)
+    ("qd" "Deduplicate" listen-queue-deduplicate
+     :transient t)
+    ("qs" "Shuffle" (lambda ()
+                      "Shuffle queue."
+                      (interactive)
+                      (call-interactively #'listen-queue-shuffle))
      :transient t)]])
 
 (provide 'listen)

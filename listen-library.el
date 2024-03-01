@@ -37,6 +37,8 @@
 
 ;;;; Variables
 
+(defvar listen-directory)
+
 (defvar-local listen-library-name nil)
 (defvar-local listen-library-paths nil)
 
@@ -58,31 +60,37 @@
                                 (`nil nil)
                                 (date (format " (%s)" date)))))
                     "[unknown album]"))
-              (title (track)
-                (or (with-face 'listen-title (listen-track-title track))
-                    "[unknown title]"))
               (number (track)
                 (or (listen-track-number track) ""))
-              (track-string (track)
+              (title (track)
                 (concat (pcase (number track)
                           ("" "")
                           (else (format "%s: " else)))
-                        (title track)))
+                        (or (with-face 'listen-title (listen-track-title track))
+                            "[unknown title]")))
+              (format-track (track)
+                (let* ((duration (listen-track-duration track)))
+                  (when duration
+                    (setf duration (concat "(" (listen-format-seconds duration) ")" " ")))
+                  (concat duration (listen-track-filename track))))
               (make-fn (&rest args)
                 (apply #'make-taxy-magit-section
                        :make #'make-fn
-                       :format-fn #'cl-prin1-to-string
+                       :format-fn #'format-track
                        args)))
     (make-fn
      :name "Genres"
      :take (apply-partially #'taxy-take-keyed
                             (list #'genre #'artist ;; #'date
-                                  #'album #'track-string)))))
+                                  #'album #'title)))))
 
 ;;;; Mode
 
+(declare-function listen-menu "listen")
+
 (defvar-keymap listen-library-mode-map
   :parent magit-section-mode-map
+  "?" #'listen-menu
   "!" #'listen-library-shell-command
   "a" #'listen-library-add-tracks
   "g" #'listen-library-revert
@@ -106,7 +114,7 @@ show the view."
                              if (file-directory-p path)
                              append (directory-files-recursively path "." t)
                              else collect path))
-         (tracks (remq nil (mapcar #'listen-queue-track filenames)))
+         (tracks (listen-queue-tracks-for filenames))
          (buffer-name (if name
                           (format "*Listen library: %s" name)
                         (generate-new-buffer-name (format "*Listen library*"))))
@@ -132,7 +140,8 @@ show the view."
 Interactively, play tracks in sections at point and select QUEUE
 with completion."
   (interactive
-   (list (listen-queue-complete) (listen-library--selected-tracks)))
+   (list (listen-queue-complete :allow-new-p t)
+         (listen-library--selected-tracks)))
   (listen-queue-add-files (mapcar #'listen-track-filename tracks) queue))
 
 (declare-function listen-play "listen")
@@ -143,7 +152,7 @@ prompt for a QUEUE to add them to."
   (interactive
    (let ((tracks (listen-library--selected-tracks)))
      (list tracks (when (length> tracks 1)
-                    (listen-queue-complete)))))
+                    (listen-queue-complete :prompt "Add tracks to queue" :allow-new-p t)))))
   (if queue
       (listen-queue-add-files (mapcar #'listen-track-filename tracks) queue)
     (listen-play (listen--player) (listen-track-filename (car tracks)))))
@@ -172,6 +181,15 @@ Interactively, read COMMAND and use tracks at point in
   (interactive
    (list (listen-mpd-completing-read :select-tag-p t)))
   (listen-library filenames))
+
+(cl-defun listen-library-from-playlist-file (filename)
+  "Show library view tracks in playlist at FILENAME."
+  (interactive
+   (list (read-file-name "Add tracks from playlist: " listen-directory nil t nil
+                         (lambda (filename)
+                           (pcase (file-name-extension filename)
+                             ("m3u" t))))))
+  (listen-library (listen-queue--m3u-filenames filename)))
 
 ;;;; Functions
 
