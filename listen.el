@@ -6,7 +6,7 @@
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
 ;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13"))
-;; Version: 0.4
+;; Version: 0.5-pre
 ;; URL: https://github.com/alphapapa/listen.el
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -65,6 +65,7 @@
 ;;;; Variables
 
 (defvar listen-mode-update-mode-line-timer nil)
+(defvar listen-queue-repeat-mode)
 
 ;;;; Customization
 
@@ -234,10 +235,20 @@ command with completion."
                   ;; HACK: It seems that sometimes the player gets restarted
                   ;; even when paused: this extra check should prevent that.
                   (member (listen--status listen-player) '("playing" "paused")))
-        (when-let ((queue (map-elt (listen-player-etc listen-player) :queue))
-                   (next-track (listen-queue-next-track queue)))
-          (listen-queue-play queue next-track)
-          (setf playing-next-p t))))
+        (when-let ((queue (map-elt (listen-player-etc listen-player) :queue)))
+          (if-let ((next-track (listen-queue-next-track queue)))
+              (progn
+                (listen-queue-play queue next-track)
+                (setf playing-next-p t))
+            ;; Queue done: repeat?
+            (pcase listen-queue-repeat-mode
+              ('queue
+               (listen-queue-play queue)
+               (setf playing-next-p t))
+              ('shuffle
+               (listen-queue-play queue (seq-random-elt (listen-queue-tracks queue)))
+               (listen-queue-shuffle queue)
+               (setf playing-next-p t)))))))
     (setf listen-mode-lighter
           (when (and listen-player (listen--running-p listen-player))
             (listen-mode-lighter)))
@@ -272,11 +283,12 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
 (declare-function listen-queue "listen-queue")
 (declare-function listen-queue-shuffle "listen-queue")
 
+(defvar listen-queue-repeat-mode)
+
 ;; It seems that autoloading the transient prefix command doesn't work
 ;; as expected, so we'll try this workaround.
 ;;;###autoload
 (defalias 'listen #'listen-menu)
-
 (transient-define-prefix listen-menu ()
   "Show Listen menu."
   :refresh-suffixes t
@@ -326,16 +338,16 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
                   (cl-position (listen-queue-current queue) (listen-queue-tracks queue))
                   (length (listen-queue-tracks queue)))
         "No queue"))
-    ("qc" "View current" (lambda ()
+    ("qq" "View current" (lambda ()
                            "View current queue."
                            (interactive)
                            (listen-queue (map-elt (listen-player-etc (listen--player)) :queue)))
      :if (lambda ()
            (map-elt (listen-player-etc (listen--player)) :queue))
      :transient t)
-    ("qq" "View another" listen-queue
+    ("qo" "View other" listen-queue
      :transient t)
-    ("qp" "Play another queue" listen-queue-play
+    ("qp" "Play other" listen-queue-play
      :transient t)
     ("qn" "New" listen-queue-new
      :transient t)
@@ -356,11 +368,18 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
      :transient t)
     ("qd" "Deduplicate" listen-queue-deduplicate
      :transient t)
-    ("qs" "Shuffle" (lambda ()
-                      "Shuffle queue."
-                      (interactive)
-                      (call-interactively #'listen-queue-shuffle))
-     :transient t)]])
+    ("qs" "Shuffle" (lambda () (interactive) (call-interactively #'listen-queue-shuffle))
+     :transient t)]
+   ["Repeat"
+    ("qrn" "None" (lambda () (interactive) (setopt listen-queue-repeat-mode nil))
+     :inapt-if (lambda () (not listen-queue-repeat-mode)))
+    ("qrq" "Queue" (lambda () (interactive) (setopt listen-queue-repeat-mode 'queue))
+     :inapt-if (lambda () (eq 'queue listen-queue-repeat-mode)))
+    ("qrs" "Queue and shuffle" (lambda () (interactive) (setopt listen-queue-repeat-mode 'shuffle))
+     :inapt-if (lambda () (eq 'shuffle listen-queue-repeat-mode)))
+    ;; ("qrt" "Track" (lambda () (interactive) (setopt listen-queue-repeat-mode 'track))
+    ;;  :inapt-if (lambda () (eq 'track listen-queue-repeat-mode)))
+    ]])
 
 (provide 'listen)
 

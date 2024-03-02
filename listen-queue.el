@@ -65,6 +65,19 @@
   "Maximum number of processes to run while probing track durations."
   :type 'natnum)
 
+(defcustom listen-queue-repeat-mode nil
+  "Whether and how to repeat queues.
+This is provided as a customization option, but it's mainly
+intended to be set from the `listen-menu'."
+  :type '(choice (const :tag "Don't repeat" nil)
+                 (const :tag "Repeat queue" queue)
+                 (const :tag "Shuffle and repeat queue"
+                        :documentation "When the queue finishes, shuffle it and play again."
+                        shuffle)
+                 ;; TODO: Implement track repeat (it doesn't fit into the current logic).
+                 ;; (const :tag "Repeat track" track)
+                 ))
+
 ;;;; Commands
 
 ;; (defmacro listen-queue-command (command)
@@ -157,7 +170,11 @@
                             "s" (lambda (_) (listen-queue-shuffle listen-queue))
                             "l" (lambda (_) "Show (selected) tracks in library view."
                                   (call-interactively #'listen-library-from-queue))
-                            "!" (lambda (_) (call-interactively #'listen-queue-shell-command)))))
+                            "!" (lambda (_) (call-interactively #'listen-queue-shell-command))))
+            (vtable-end-of-table)
+            (insert (format "Duration: %s"
+                            (listen-format-seconds (cl-reduce #'+ (listen-queue-tracks queue)
+                                                              :key #'listen-track-duration)))))
           (goto-char (point-min))
           (listen-queue--highlight-current)
           (hl-line-mode 1))))
@@ -221,7 +238,8 @@ If BACKWARDP, move it backward."
         (goto-char (point-min))
         (when (vtable-current-table)
           (vtable-revert-command))
-        (goto-char pos))
+        (goto-char pos)
+        (goto-char (pos-bol)))
       (listen-queue--highlight-current))))
 
 (declare-function listen-mode "listen")
@@ -579,7 +597,7 @@ MAX-PROCESSES limits the number of parallel probing processes."
     (cl-labels
         ((probe-duration (track)
            (with-demoted-errors "Unable to get duration for %S"
-             (with-current-buffer (get-buffer-create (generate-new-buffer " *listen: ffprobe*"))
+             (with-current-buffer (generate-new-buffer " *listen: ffprobe*")
                (let* ((sentinel (lambda (process status)
                                   (unwind-protect
                                       (pcase status
@@ -590,7 +608,7 @@ MAX-PROCESSES limits the number of parallel probing processes."
                                          (with-current-buffer (process-buffer process)
                                            (goto-char (point-min))
                                            (let ((duration (read (current-buffer))))
-                                             (cl-check-type duration number )
+                                             (cl-check-type duration number)
                                              (setf (listen-track-duration track) duration)))))
                                     (kill-buffer (process-buffer process))
                                     (cl-callf2 remove process processes)
@@ -609,7 +627,7 @@ MAX-PROCESSES limits the number of parallel probing processes."
            (while (and tracks (length< processes max-processes))
              (let ((track (pop tracks)))
                (push (probe-duration track) processes)))))
-      (with-timeout ((* 0.05 (length tracks)) (error "Probing for track duration timed out"))
+      (with-timeout ((* 0.1 (length tracks)) (error "Probing for track duration timed out"))
         (while (or tracks processes)
           (probe-more)
           (while (accept-process-output nil 0.01))
