@@ -161,6 +161,7 @@ intended to be set from the `listen-menu'."
                             "j" #'listen-jump
                             "n" (lambda (_) (forward-line 1))
                             "p" (lambda (_) (forward-line -1))
+                            "m" #'listen-view-track
                             "N" (lambda (track) (listen-queue-transpose-forward track queue))
                             "P" (lambda (track) (listen-queue-transpose-backward track queue))
                             "C-k" (lambda (track) (listen-queue-kill-track track queue))
@@ -171,11 +172,7 @@ intended to be set from the `listen-menu'."
                             "s" (lambda (_) (listen-queue-shuffle listen-queue))
                             "l" (lambda (_) "Show (selected) tracks in library view."
                                   (call-interactively #'listen-library-from-queue))
-                            "!" (lambda (_) (call-interactively #'listen-queue-shell-command))))
-            (vtable-end-of-table)
-            (insert (format "Duration: %s"
-                            (listen-format-seconds (cl-reduce #'+ (listen-queue-tracks queue)
-                                                              :key #'listen-track-duration)))))
+                            "!" (lambda (_) (call-interactively #'listen-queue-shell-command)))))
           (goto-char (point-min))
           (listen-queue--highlight-current)
           (hl-line-mode 1))))
@@ -235,10 +232,15 @@ If BACKWARDP, move it backward."
   (when-let ((buffer (listen-queue-buffer queue)))
     (with-current-buffer buffer
       ;; `save-excursion' doesn't work because of the table's being reverted.
-      (let ((pos (point)))
+      (let ((pos (point))
+            (inhibit-read-only t))
         (goto-char (point-min))
         (when (vtable-current-table)
           (vtable-revert-command))
+        (vtable-end-of-table)
+        (insert (format "Duration: %s"
+                        (listen-format-seconds (cl-reduce #'+ (listen-queue-tracks queue)
+                                                          :key #'listen-track-duration))))
         (goto-char pos)
         (goto-char (pos-bol)))
       (listen-queue--highlight-current)
@@ -345,15 +347,6 @@ which see."
   (listen-queue-play queue)
   queue)
 
-(declare-function listen-mpd-completing-read "listen-mpd")
-(cl-defun listen-queue-add-from-mpd (filenames queue)
-  "Add FILENAMES (selected from MPD library) to QUEUE."
-  (interactive
-   (list (listen-mpd-completing-read :select-tag-p t)
-         (listen-queue-complete :allow-new-p t)))
-  (require 'listen-mpd)
-  (listen-queue-add-files filenames queue))
-
 (cl-defun listen-queue-add-from-playlist-file (filename queue)
   "Add tracks to QUEUE selected from playlist at FILENAME.
 M3U playlists are supported."
@@ -418,6 +411,14 @@ with \"ffprobe\"."
       (when listen-queue-ffprobe-p
         (listen-queue--add-track-durations tracks))
       tracks)))
+
+(defun listen-queue-track-revert (track)
+  "Revert TRACK's metadata from disk."
+  ;; TODO: Use this where appropriate.
+  (let ((new-track (car (listen-queue-tracks-for (list (listen-track-filename track))))))
+    (dolist (slot '(artist title album number date genre))
+      (setf (cl-struct-slot-value 'listen-track slot track)
+            (cl-struct-slot-value 'listen-track slot new-track)))))
 
 (defun listen-queue-shuffle (queue)
   "Shuffle QUEUE."
@@ -517,6 +518,14 @@ queue buffer."
   ;; (listen-queue-revert)
   )
 
+(defun listen-queue-rename (name queue)
+  "Rename QUEUE to NAME."
+  (interactive
+   (let* ((queue (listen-queue-complete))
+          (name (read-string (format "Rename queue %S:" (listen-queue-name queue)))))
+     (list name queue)))
+  (setf (listen-queue-name queue) name))
+
 (cl-defun listen-queue-revert (queue &key refreshp)
   "Revert QUEUE's buffer.
 When REFRESHP (interactively, with prefix), refresh tracks from
@@ -560,6 +569,67 @@ tracks in the queue unchanged)."
         (cl-loop collect (vtable-current-object)
                  do (forward-line 1)
                  while (<= (point) end))))))
+
+(cl-defun listen-queue-remaining-duration (&optional (player (listen--player)))
+  "Return seconds remaining in PLAYER's queue."
+  (when-let ((queue (map-elt (listen-player-etc player) :queue))
+             (current-track-remaining (- (listen--length player) (listen--elapsed player)))
+             (current-track-position (cl-position (listen-queue-current queue)
+                                                  (listen-queue-tracks queue)))
+             (remaining-tracks (cl-subseq (listen-queue-tracks queue) (1+ current-track-position)))
+             (remaining-tracks-duration (cl-reduce #'+ remaining-tracks :key #'listen-track-duration)))
+    (+ current-track-remaining remaining-tracks-duration)))
+
+(cl-defun listen-queue-format-remaining (&optional (player (listen--player)))
+  "Return PLAYER's queue's remaining duration formatted."
+  (when-let ((duration (listen-queue-remaining-duration player)))
+    (concat "-" (listen-format-seconds duration))))
+
+;;;;; Track view
+
+;;;###autoload
+(defun listen-view-track (track)
+  "View information about TRACK."
+  (interactive (list (listen-queue-current (map-elt (listen-player-etc (listen--player)) :queue))))
+  (with-current-buffer (get-buffer-create (format "*Listen track: %S*" (listen-track-filename track)))
+    (let ((inhibit-read-only t))
+      (read-only-mode)
+      (erase-buffer)
+      (toggle-truncate-lines 1)
+      (cl-labels ((get (slot)
+                    (cons (capitalize (symbol-name slot))
+                          (cl-struct-slot-value 'listen-track slot track))))
+        (make-vtable
+         :columns
+         (list (list :name "Key" :getter (lambda (row _table) (car row)))
+               (list :name "Value" :getter (lambda (row _table) (cdr row))))
+         :objects-function
+         (lambda ()
+           (append (list (get 'filename)
+                         (get 'artist)
+                         (get 'title)
+                         (get 'album)
+                         (get 'number)
+                         (get 'date)
+                         (cons " " " "))
+                   (sort (listen-info--decode-info-fields (listen-track-filename track))
+                         (lambda (a b)
+                           (string< (car a) (car b))))))
+         :actions (list "q" (lambda (_) (bury-buffer))
+                        "g" (lambda (_)
+                              (listen-queue-track-revert track)
+                              (vtable-revert-command))
+                        "?" (lambda (_) (call-interactively #'listen-menu))
+                        "n" (lambda (_) (forward-line 1))
+                        "p" (lambda (_) (forward-line -1))
+                        "SPC" (lambda (_) (call-interactively #'listen-pause))
+                        "!" (lambda (_) (let ((filename (listen-track-filename track)))
+                                          (listen-shell-command
+                                           (read-shell-command (format "Run command on %S: " filename))
+                                           (list filename)))))))
+      (goto-char (point-min))
+      (hl-line-mode 1))
+    (pop-to-buffer (current-buffer))))
 
 ;;;;; Bookmark support
 
@@ -640,6 +710,98 @@ MAX-PROCESSES limits the number of parallel probing processes."
           (probe-more)
           (while (accept-process-output nil 0.01))
           (sleep-for 0.01))))))
+
+;;;;; Queue delay mode
+
+;; When you want music to play periodically, like while playing
+;; Minecraft.
+
+(defvar listen-queue-delay-timer nil)
+
+(defcustom listen-queue-delay-time-range '(120 . 600)
+  "Range of delay in seconds."
+  :type '(cons (natnum :tag "Minimum delay")
+               (natnum :tag "Maximum delay")))
+
+(declare-function listen-play-next "listen")
+(define-minor-mode listen-queue-delay-mode
+  "Delay playing the next track in the queue by a random amount of time.
+Delay according to `listen-queue-delay-time-range', which see."
+  :global t
+  (if listen-queue-delay-mode
+      (advice-add #'listen-play-next :around #'listen-queue-play-next-delayed)
+    (advice-remove #'listen-play-next #'listen-queue-play-next-delayed)
+    (when (timerp listen-queue-delay-timer)
+      (setf listen-queue-delay-timer (cancel-timer listen-queue-delay-timer)))))
+
+(defun listen-queue-play-next-delayed (oldfun player)
+  "Call OLDFUN to play PLAYER's queue's next track after a random delay.
+Delay according to `listen-queue-delay-time-range', which see."
+  (when-let ((queue (map-elt (listen-player-etc player) :queue)))
+    ;; Wrapping with `listen-once-per' protects against this function
+    ;; being called multiple times while `listen-queue-delay-mode' is
+    ;; enabled.  Sort of a hack, but it will serve until a refactor.
+    (listen-once-per (listen-queue-next-track queue)
+      (let ((delay-seconds (max (car listen-queue-delay-time-range)
+                                (random (cdr listen-queue-delay-time-range)))))
+        (setf listen-queue-delay-timer (run-at-time delay-seconds nil oldfun player))))))
+
+;;;;; Queue list
+
+(defun listen-queue-list ()
+  "Show queue list."
+  (interactive)
+  (let* ((buffer-name "*Listen Queues*")
+         (buffer (get-buffer buffer-name)))
+    (unless buffer
+      (with-current-buffer (setf buffer (get-buffer-create buffer-name))
+        (let ((inhibit-read-only t))
+          (read-only-mode)
+          (erase-buffer)
+          (toggle-truncate-lines 1)
+          (when listen-queues
+            (make-vtable
+             :columns
+             (list (list :name "▶" :primary 'descend
+                         :getter (lambda (queue _table)
+                                   (when-let ((player (listen--player)))
+                                     (if (eq queue (map-elt (listen-player-etc player) :queue))
+                                         "▶" " "))))
+                   (list :name "Name" :primary 'ascend
+                         :getter (lambda (queue _table)
+                                   (listen-queue-name queue)))
+                   (list :name "Tracks" :align 'right
+                         :getter (lambda (queue _table)
+                                   (length (listen-queue-tracks queue))))
+                   ;; (list :name "Duration"
+                   ;;       :getter (lambda (track _table)
+                   ;;                 (when-let ((duration (listen-track-duration track)))
+                   ;;                   (listen-format-seconds duration))))
+                   )
+             :objects-function (lambda ()
+                                 listen-queues)
+             :sort-by '((1 . ascend))
+             ;; TODO: Add a transient to show these bindings when pressing "?".
+             :actions (list "q" (lambda (_) (bury-buffer))
+                            "?" (lambda (_) (call-interactively #'listen-menu))
+                            "g" (lambda (_) (call-interactively #'listen-queue-list))
+                            "n" (lambda (_) (forward-line 1))
+                            "p" (lambda (_) (forward-line -1))
+                            "R" (lambda (queue)
+                                  (listen-queue-rename
+                                   (read-string (format "Rename queue %S: " (listen-queue-name queue)))
+                                   queue)
+                                  (call-interactively #'vtable-revert-command))
+                            "C-k" #'listen-queue-discard
+                            "RET" #'listen-queue
+                            "SPC" (lambda (_) (call-interactively #'listen-pause))
+                            "l" (lambda (queue)
+                                  (listen-library-from-queue :queue queue))
+                            ;; "!" (lambda (_) (call-interactively #'listen-queue-shell-command))
+                            )))
+          (goto-char (point-min))
+          (hl-line-mode 1))))
+    (pop-to-buffer buffer)))
 
 ;;;; Footer
 
