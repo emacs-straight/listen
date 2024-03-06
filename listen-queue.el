@@ -124,6 +124,14 @@ intended to be set from the `listen-menu'."
                          :getter (lambda (track _table)
                                    (when-let ((duration (listen-track-duration track)))
                                      (listen-format-seconds duration))))
+                   (list :name "r/5"
+                         :getter (lambda (track _table)
+                                   (if-let ((rating (map-elt (listen-track-etc track) "fmps_rating"))
+                                            ((not (equal "-1" rating))))
+                                       (progn
+                                         (setf rating (number-to-string (* 5 (string-to-number rating))))
+                                         (propertize rating 'face 'listen-rating))
+                                     "")))
                    (list :name "Artist" :max-width 20 :align 'right
                          :getter (lambda (track _table)
                                    (propertize (or (listen-track-artist track) "")
@@ -174,9 +182,22 @@ intended to be set from the `listen-menu'."
                                   (call-interactively #'listen-library-from-queue))
                             "!" (lambda (_) (call-interactively #'listen-queue-shell-command)))))
           (goto-char (point-min))
-          (listen-queue--highlight-current)
+          (listen-queue--annotate-buffer)
           (hl-line-mode 1))))
     (pop-to-buffer buffer)))
+
+(defun listen-queue--annotate-buffer ()
+  "Annotate current buffer.
+To be called in a queue's buffer."
+  (let* ((queue listen-queue)
+         ;; HACK: Update duration here (for now).
+         (duration (cl-reduce #'+ (listen-queue-tracks queue)
+                              :key #'listen-track-duration)))
+    (setf (map-elt (listen-queue-etc queue) :duration) duration)
+    (vtable-end-of-table)
+    (when duration
+      (insert (format "Duration: %s" (listen-format-seconds duration))))
+    (listen-queue--highlight-current)))
 
 (cl-defun listen-queue-transpose-forward (track queue &key backwardp)
   "Transpose TRACK forward in QUEUE.
@@ -232,18 +253,11 @@ If BACKWARDP, move it backward."
   (when-let ((buffer (listen-queue-buffer queue)))
     (with-current-buffer buffer
       ;; `save-excursion' doesn't work because of the table's being reverted.
-      (let ((pos (point))
-            (inhibit-read-only t))
+      (let ((inhibit-read-only t))
         (goto-char (point-min))
         (when (vtable-current-table)
           (vtable-revert-command))
-        (vtable-end-of-table)
-        (insert (format "Duration: %s"
-                        (listen-format-seconds (cl-reduce #'+ (listen-queue-tracks queue)
-                                                          :key #'listen-track-duration))))
-        (goto-char pos)
-        (goto-char (pos-bol)))
-      (listen-queue--highlight-current)
+        (listen-queue--annotate-buffer))
       (listen-queue-goto-current))))
 
 (declare-function listen-mode "listen")
@@ -400,7 +414,11 @@ buffer, if any)."
      :album (map-elt metadata "album")
      :number (map-elt metadata "tracknumber")
      :date (map-elt metadata "date")
-     :genre (map-elt metadata "genre"))))
+     :genre (map-elt metadata "genre")
+     ;; TODO: Since we're storing all of the metadata in the etc slot,
+     ;; consider whether to consolidate there or add slots for,
+     ;; e.g. rating.
+     :etc metadata)))
 
 (defun listen-queue-tracks-for (filenames)
   "Return tracks for FILENAMES.
@@ -615,7 +633,7 @@ tracks in the queue unchanged)."
                    (sort (listen-info--decode-info-fields (listen-track-filename track))
                          (lambda (a b)
                            (string< (car a) (car b))))))
-         :actions (list "q" (lambda (_) (bury-buffer))
+         :actions (list "q" (lambda (_) (quit-window))
                         "g" (lambda (_)
                               (listen-queue-track-revert track)
                               (vtable-revert-command))
@@ -713,8 +731,7 @@ MAX-PROCESSES limits the number of parallel probing processes."
 
 ;;;;; Queue delay mode
 
-;; When you want music to play periodically, like while playing
-;; Minecraft.
+;; When you want music to play periodically, e.g. like Minecraft does.
 
 (defvar listen-queue-delay-timer nil)
 
@@ -742,6 +759,8 @@ Delay according to `listen-queue-delay-time-range', which see."
     ;; being called multiple times while `listen-queue-delay-mode' is
     ;; enabled.  Sort of a hack, but it will serve until a refactor.
     (listen-once-per (listen-queue-next-track queue)
+      ;; FIXME: Since `random' takes an upper limit, by having a floor
+      ;; for values which are below the minimum, the delay is biased.
       (let ((delay-seconds (max (car listen-queue-delay-time-range)
                                 (random (cdr listen-queue-delay-time-range)))))
         (setf listen-queue-delay-timer (run-at-time delay-seconds nil oldfun player))))))
@@ -751,57 +770,53 @@ Delay according to `listen-queue-delay-time-range', which see."
 (defun listen-queue-list ()
   "Show queue list."
   (interactive)
-  (let* ((buffer-name "*Listen Queues*")
-         (buffer (get-buffer buffer-name)))
-    (unless buffer
-      (with-current-buffer (setf buffer (get-buffer-create buffer-name))
-        (let ((inhibit-read-only t))
-          (read-only-mode)
-          (erase-buffer)
-          (toggle-truncate-lines 1)
-          (when listen-queues
-            (make-vtable
-             :columns
-             (list (list :name "▶" :primary 'descend
-                         :getter (lambda (queue _table)
-                                   (when-let ((player (listen--player)))
-                                     (if (eq queue (map-elt (listen-player-etc player) :queue))
-                                         "▶" " "))))
-                   (list :name "Name" :primary 'ascend
-                         :getter (lambda (queue _table)
-                                   (listen-queue-name queue)))
-                   (list :name "Tracks" :align 'right
-                         :getter (lambda (queue _table)
-                                   (length (listen-queue-tracks queue))))
-                   ;; (list :name "Duration"
-                   ;;       :getter (lambda (track _table)
-                   ;;                 (when-let ((duration (listen-track-duration track)))
-                   ;;                   (listen-format-seconds duration))))
-                   )
-             :objects-function (lambda ()
-                                 listen-queues)
-             :sort-by '((1 . ascend))
-             ;; TODO: Add a transient to show these bindings when pressing "?".
-             :actions (list "q" (lambda (_) (bury-buffer))
-                            "?" (lambda (_) (call-interactively #'listen-menu))
-                            "g" (lambda (_) (call-interactively #'listen-queue-list))
-                            "n" (lambda (_) (forward-line 1))
-                            "p" (lambda (_) (forward-line -1))
-                            "R" (lambda (queue)
-                                  (listen-queue-rename
-                                   (read-string (format "Rename queue %S: " (listen-queue-name queue)))
-                                   queue)
-                                  (call-interactively #'vtable-revert-command))
-                            "C-k" #'listen-queue-discard
-                            "RET" #'listen-queue
-                            "SPC" (lambda (_) (call-interactively #'listen-pause))
-                            "l" (lambda (queue)
-                                  (listen-library-from-queue :queue queue))
-                            ;; "!" (lambda (_) (call-interactively #'listen-queue-shell-command))
-                            )))
-          (goto-char (point-min))
-          (hl-line-mode 1))))
-    (pop-to-buffer buffer)))
+  (with-current-buffer (get-buffer-create "*Listen Queues*")
+    (let ((inhibit-read-only t))
+      (read-only-mode)
+      (erase-buffer)
+      (toggle-truncate-lines 1)
+      (when listen-queues
+        (make-vtable
+         :columns
+         (list (list :name "▶" :primary 'descend
+                     :getter (lambda (queue _table)
+                               (when-let ((player (listen--player)))
+                                 (if (eq queue (map-elt (listen-player-etc player) :queue))
+                                     "▶" " "))))
+               (list :name "Name" :primary 'ascend
+                     :getter (lambda (queue _table)
+                               (listen-queue-name queue)))
+               (list :name "Tracks" :align 'right
+                     :getter (lambda (queue _table)
+                               (length (listen-queue-tracks queue))))
+               (list :name "Duration"
+                     :getter (lambda (queue _table)
+                               (when-let ((duration (map-elt (listen-queue-etc queue) :duration)))
+                                 (listen-format-seconds duration)))))
+         :objects-function (lambda ()
+                             listen-queues)
+         :sort-by '((1 . ascend))
+         ;; TODO: Add a transient to show these bindings when pressing "?".
+         :actions (list "q" (lambda (_) (bury-buffer))
+                        "?" (lambda (_) (call-interactively #'listen-menu))
+                        "g" (lambda (_) (call-interactively #'listen-queue-list))
+                        "n" (lambda (_) (forward-line 1))
+                        "p" (lambda (_) (forward-line -1))
+                        "R" (lambda (queue)
+                              (listen-queue-rename
+                               (read-string (format "Rename queue %S: " (listen-queue-name queue)))
+                               queue)
+                              (call-interactively #'vtable-revert-command))
+                        "C-k" #'listen-queue-discard
+                        "RET" #'listen-queue
+                        "SPC" (lambda (_) (call-interactively #'listen-pause))
+                        "l" (lambda (queue)
+                              (listen-library-from-queue :queue queue))
+                        ;; "!" (lambda (_) (call-interactively #'listen-queue-shell-command))
+                        )))
+      (goto-char (point-min))
+      (hl-line-mode 1)
+      (pop-to-buffer (current-buffer)))))
 
 ;;;; Footer
 
