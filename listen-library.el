@@ -49,14 +49,16 @@
               (genre (track)
                 (or (listen-track-genre track) "[unknown genre]"))
               (date (track)
-                (or (listen-track-date track) "[unknown date]"))
+                (or (map-elt (listen-track-etc track) "originalyear")
+                    (map-elt (listen-track-etc track) "originaldate")
+                    (listen-track-date track)))
               (artist (track)
                 (or (with-face 'listen-artist (listen-track-artist track))
                     "[unknown artist]"))
               (album (track)
                 (or (when-let ((album (with-face 'listen-album (listen-track-album track))))
                       (concat album
-                              (pcase (listen-track-date track)
+                              (pcase (date track)
                                 (`nil nil)
                                 (date (format " (%s)" date)))))
                     "[unknown album]"))
@@ -103,6 +105,7 @@
   "a" #'listen-library-add-tracks
   "g" #'listen-library-revert
   "j" #'listen-library-jump
+  "m" #'listen-library-view-track
   "RET" #'listen-library-play-or-add)
 
 (define-derived-mode listen-library-mode magit-section-mode "Listen-Library"
@@ -164,13 +167,19 @@ prompt for a QUEUE to add them to."
                     (listen-queue-complete :prompt "Add tracks to queue" :allow-new-p t)))))
   (if queue
       (listen-queue-add-files (mapcar #'listen-track-filename tracks) queue)
-    (listen-play (listen--player) (listen-track-filename (car tracks)))))
+    (listen-play (listen-current-player) (listen-track-filename (car tracks)))))
 
 (defun listen-library-jump (track)
   "Jump to TRACK in a Dired buffer."
   (interactive
    (list (car (listen-library--selected-tracks))))
   (listen-jump track))
+
+(defun listen-library-view-track (track)
+  "View TRACK's metadata."
+  (interactive
+   (list (car (listen-library--selected-tracks))))
+  (listen-view-track track))
 
 (declare-function listen-shell-command "listen")
 (defun listen-library-shell-command (command filenames)

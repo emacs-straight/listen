@@ -75,7 +75,7 @@
 (defface listen-title '((t :inherit font-lock-function-name-face))
   "Track title.")
 
-(defface listen-album '((t :inherit font-lock-doc-face))
+(defface listen-album '((t :slant italic :inherit font-lock-doc-face))
   "Track album.")
 
 (defface listen-filename '((t :inherit fixed-pitch))
@@ -91,7 +91,7 @@
 
 ;; FIXME: Declare this differently or something.
 (declare-function make-listen-player-vlc "listen-vlc")
-(defun listen--player ()
+(defun listen-current-player ()
   "Return variable `listen-player' or a newly set one if nil."
   (or listen-player
       (setf listen-player (make-listen-player-vlc))))

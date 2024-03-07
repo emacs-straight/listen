@@ -6,7 +6,7 @@
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
 ;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13"))
-;; Version: 0.5-pre
+;; Version: 0.6-pre
 ;; URL: https://github.com/alphapapa/listen.el
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -96,6 +96,7 @@ For the currently playing track."
 Each is called without arguments and should return a string
 without extra whitespace."
   :type '(repeat (choice (const :tag "Remaining queue time" listen-queue-format-remaining)
+                         (const :tag "Track rating" listen-lighter-format-rating)
                          function)))
 
 (defcustom listen-track-end-functions '(listen-play-next)
@@ -110,7 +111,7 @@ its current track will be the one that just finished playing)."
   "Quit PLAYER.
 Interactively, uses the default player."
   (interactive
-   (list (listen--player)))
+   (list (listen-current-player)))
   (delete-process (listen-player-process player))
   (when (eq player listen-player)
     (setf listen-player nil))
@@ -120,7 +121,7 @@ Interactively, uses the default player."
 (defun listen-next (player)
   "Play next track in PLAYER's queue.
 Interactively, uses the default player."
-  (interactive (list (listen--player)))
+  (interactive (list (listen-current-player)))
   (listen-queue-next (map-elt (listen-player-etc player) :queue)))
 
 (defun listen-pause (player)
@@ -138,7 +139,7 @@ Interactively, uses the default player."
   "Play FILE with PLAYER.
 Interactively, uses the default player."
   (interactive
-   (list (listen--player)
+   (list (listen-current-player)
          (read-file-name "Play file: " listen-directory nil t)))
   (listen--play player file))
 
@@ -147,7 +148,7 @@ Interactively, uses the default player."
 Interactively, uses the default player."
   ;; TODO: Relative volume (at least for VLC).
   (interactive
-   (let* ((player (listen--player))
+   (let* ((player (listen-current-player))
           (volume (floor (listen--volume player))))
      (list player (read-number "Volume %: " volume))))
   (listen--volume player volume)
@@ -159,7 +160,7 @@ Interactively, use the default player, and read a position
 timestamp, like \"23\" or \"1:23\", with optional -/+ prefix for
 relative seek."
   (interactive
-   (let* ((player (listen--player))
+   (let* ((player (listen-current-player))
           (position (read-string "Seek to position: "))
           (prefix (when (string-match (rx bos (group (any "-+")) (group (1+ anything))) position)
                     (prog1 (match-string 1 position)
@@ -173,7 +174,7 @@ relative seek."
 Interactively, use the current player's current track, and read
 command with completion."
   (interactive
-   (let* ((player (listen--player))
+   (let* ((player (listen-current-player))
           (filenames (list (abbreviate-file-name (listen--filename player))))
           (command (read-shell-command (format "Run command on %S: " filenames))))
      (list command filenames)))
@@ -187,7 +188,7 @@ command with completion."
 (defun listen-jump (track)
   "Jump to TRACK in a Dired buffer.
 Interactively, jump to current queue's current track."
-  (interactive (list (listen-queue-current (map-elt (listen-player-etc (listen--player)) :queue))))
+  (interactive (list (listen-queue-current (map-elt (listen-player-etc (listen-current-player)) :queue))))
   (dired-jump-other-window (listen-track-filename track)))
 
 ;;;; Mode
@@ -249,6 +250,15 @@ Interactively, jump to current queue's current track."
                        "")
                      " ")
              '("■ ")))))
+
+(defun listen-lighter-format-rating ()
+  "Return the rating of the current track for display in the lighter."
+  (when-let ((player (listen-current-player))
+             (queue (map-elt (listen-player-etc player) :queue))
+             (track (listen-queue-current queue))
+             (rating (or (listen-track-rating track)
+                         (map-elt (listen-track-etc track) "fmps_rating"))))
+    (format "[%s]" (* 5 (string-to-number rating)))))
 
 (declare-function listen-queue-play "listen-queue")
 (declare-function listen-queue-next-track "listen-queue")
@@ -347,12 +357,12 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("=" "Set" listen-volume)
     ("v" "Down" (lambda ()
                   (interactive)
-                  (let ((player (listen--player)))
+                  (let ((player (listen-current-player)))
                     (listen-volume player (max 0 (- (listen--volume player) 5)))))
      :transient t)
     ("V" "Up" (lambda ()
                 (interactive)
-                (let ((player (listen--player)))
+                (let ((player (listen-current-player)))
                   (listen-volume player (min 100 (+ (listen--volume player) 5)))))
      :transient t)]
    ["Repeat"
@@ -385,9 +395,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qq" "View current" (lambda ()
                            "View current queue."
                            (interactive)
-                           (listen-queue (map-elt (listen-player-etc (listen--player)) :queue)))
+                           (listen-queue (map-elt (listen-player-etc (listen-current-player)) :queue)))
      :if (lambda ()
-           (map-elt (listen-player-etc (listen--player)) :queue))
+           (map-elt (listen-player-etc (listen-current-player)) :queue))
      :transient t)
     ("qo" "View other" listen-queue)
     ("qp" "Play other" listen-queue-play
