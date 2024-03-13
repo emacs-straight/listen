@@ -123,13 +123,19 @@ returns them.  Interactively, with prefix, NAME may be specified
 to show in the mode line and bookmark name.  BUFFER may be
 specified in which to show the view."
   (interactive
-   (list (list (read-file-name "View library for: "))
-         :name (when current-prefix-arg
-                 (read-string "Library name: "))))
-  (let* ((tracks (cl-etypecase tracks
-                   (function (funcall tracks))
-                   (list tracks)))
-         (buffer-name (if name
+   (let* ((path (read-file-name "View library for: "))
+          (tracks-function (lambda ()
+                             ;; TODO: Use "&rest" for `listen-queue-tracks-for'?
+                             (listen-queue-tracks-for
+                              (if (file-directory-p path)
+                                  (directory-files-recursively path ".")
+                                (list path)))))
+          (name (cond (current-prefix-arg
+                       (read-string "Library name: "))
+                      ((file-directory-p path)
+                       path))))
+     (list tracks-function :name name)))
+  (let* ((buffer-name (if name
                           (format "*Listen library: %s*" name)
                         (generate-new-buffer-name (format "*Listen library*"))))
          (buffer (or buffer (get-buffer-create buffer-name)))
@@ -141,10 +147,13 @@ specified in which to show the view."
       (erase-buffer)
       (thread-last listen-library-taxy
                    taxy-emptied
-                   (taxy-fill tracks)
+                   (taxy-fill (cl-etypecase tracks
+                                (function (funcall tracks))
+                                (list tracks)))
                    ;; (taxy-sort #'string< #'listen-queue-track-)
                    (taxy-sort* #'string< #'taxy-name)
-                   taxy-magit-section-insert))
+                   taxy-magit-section-insert)
+      (goto-char (point-min)))
     (pop-to-buffer buffer)))
 
 ;;;; Commands
@@ -152,15 +161,11 @@ specified in which to show the view."
 (defun listen-library-to-queue (tracks queue)
   "Add current library buffer's TRACKS to QUEUE.
 Interactively, add TRACKS in sections at point and select QUEUE
-with completion.  Duplicate tracks (by filename) are removed from
-the queue."
+with completion."
   (interactive
    (list (listen-library--selected-tracks)
          (listen-queue-complete :prompt "Add to queue" :allow-new-p t)))
-  (cl-callf2 append (listen-queue-tracks queue) tracks)
-  (setf (listen-queue-tracks queue)
-        (cl-delete-duplicates (listen-queue-tracks queue)
-                              :key #'listen-track-filename :test #'equal)))
+  (listen-queue-add-tracks tracks queue))
 
 (declare-function listen-play "listen")
 (declare-function listen-queue-add-tracks "listen-queue")

@@ -127,7 +127,8 @@ Useful for when `save-excursion' does not preserve point."
       (progn
         (pop-to-buffer buffer)
         (listen-queue-goto-current))
-    (with-current-buffer (get-buffer-create (format "*Listen Queue: %s*" (listen-queue-name queue)))
+    (with-current-buffer
+        (setf buffer (get-buffer-create (format "*Listen Queue: %s*" (listen-queue-name queue))))
       (let ((inhibit-read-only t))
         (listen-queue-mode)
         (setf listen-queue queue)
@@ -226,8 +227,10 @@ Useful for when `save-excursion' does not preserve point."
                                 (call-interactively #'listen-library-from-queue))
                           "!" (lambda (_) (call-interactively #'listen-queue-shell-command)))))
         (listen-queue--annotate-buffer)
-        (listen-queue-goto-current))
-      (pop-to-buffer (current-buffer)))))
+        (listen-queue-goto-current)))
+    ;; NOTE: We pop to the buffer outside of `with-current-buffer' so
+    ;; `listen-queue--bookmark-handler' works correctly.
+    (pop-to-buffer buffer)))
 
 (defun listen-queue--annotate-buffer ()
   "Annotate current buffer.
@@ -434,8 +437,17 @@ which see."
   queue)
 
 (defun listen-queue-add-tracks (tracks queue)
-  "Add TRACKS to QUEUE."
-  (cl-callf append (listen-queue-tracks queue) tracks))
+  "Add TRACKS to QUEUE.
+Duplicate tracks (by filename) are removed from the queue, and
+the queue's buffer is updated, if any."
+  (cl-callf append (listen-queue-tracks queue) tracks)
+  ;; TODO: Consider updating the metadata of any duplicate tracks.
+  (setf (listen-queue-tracks queue)
+        (cl-delete-duplicates (listen-queue-tracks queue)
+                              :key (lambda (track)
+                                     (expand-file-name (listen-track-filename track)))
+                              :test #'file-equal-p))
+  (listen-queue--update-buffer queue))
 
 (cl-defun listen-queue-add-from-playlist-file (filename queue)
   "Add tracks to QUEUE selected from playlist at FILENAME.
@@ -520,7 +532,10 @@ with \"ffprobe\"."
 (defun listen-queue-revert-track (track)
   "Revert TRACK's metadata from disk."
   ;; TODO: Use this where appropriate.
-  (let ((new-track (car (listen-queue-tracks-for (list (listen-track-filename track))))))
+  (when-let ((new-track (car (listen-queue-tracks-for (list (listen-track-filename track))))))
+    ;; If `listen-queue-track' (and thereby `listen-queue-tracks-for') returns nil for a track
+    ;; (e.g. if its metadata can't be read), leave it alone (e.g. its metadata might have come from
+    ;; by MPD).
     (dolist (slot '(artist title album number date genre etc))
       ;; FIXME: Store metadata in its own slot and don't misuse etc slot.
       (setf (cl-struct-slot-value 'listen-track slot track)
@@ -554,7 +569,8 @@ tracks no longer backed by a file are removed."
   ;; an apparent duplicate that does have a file.
   (setf (listen-queue-tracks queue)
         (cl-remove-if-not #'file-exists-p (listen-queue-tracks queue)
-                          :key #'listen-track-filename)
+                          :key (lambda (track)
+                                 (expand-file-name (listen-track-filename track))))
         (listen-queue-tracks queue)
         (cl-remove-duplicates
          (listen-queue-tracks queue)
@@ -644,13 +660,12 @@ disk."
       ;; Update current track by filename.
       (setf (listen-queue-current queue)
             (cl-find (listen-track-filename (listen-queue-current queue))
-                     (listen-queue-tracks queue) :key #'listen-track-filename :test #'equal))))
+                     (listen-queue-tracks queue) :key #'listen-track-filename :test #'file-equal-p))))
   (listen-queue--update-buffer queue))
 
 (defun listen-queue-reload (queue)
   "Reload QUEUE's tracks from disk."
-  (setf (listen-queue-tracks queue)
-        (listen-queue-tracks-for (mapcar #'listen-track-filename (listen-queue-tracks queue)))))
+  (mapc #'listen-queue-revert-track (listen-queue-tracks queue)))
 
 (defun listen-queue-order-by ()
   "Order the queue by the column at point.
@@ -933,28 +948,28 @@ Delay according to `listen-queue-delay-time-range', which see."
               (error "Can't find the old object"))
             (setcar (cdr objects) object))
           ;; Then update the cache...
-          (let* ((line-number (seq-position (car (vtable--cache table)) old-object
-                                            (lambda (a b)
-                                              (equal (car a) b))))
-                 (line (elt (car (vtable--cache table)) line-number)))
-            (unless line
-              (error "Can't find cached object"))
-            (setcar line object)
-            (setcdr line (vtable--compute-cached-line table object))
-            ;; ... and redisplay the line in question.
-            (save-excursion
-              (vtable-goto-object old-object)
-              (let ((keymap (get-text-property (point) 'keymap))
-                    (start (point)))
-                (delete-line)
-                (vtable--insert-line table line line-number
-                                     (nth 1 (vtable--cache table))
-                                     (vtable--spacer table))
-                (add-text-properties start (point) (list 'keymap keymap
-                                                         'vtable table))))
-            ;; We may have inserted a non-numerical value into a previously
-            ;; all-numerical table, so recompute.
-            (vtable--recompute-numerical table (cdr line)))))
+          (if-let ((line-number (seq-position (car (vtable--cache table)) old-object
+                                              (lambda (a b)
+                                                (equal (car a) b))))
+                   (line (elt (car (vtable--cache table)) line-number)))
+              (progn
+                (setcar line object)
+                (setcdr line (vtable--compute-cached-line table object))
+                ;; ... and redisplay the line in question.
+                (save-excursion
+                  (vtable-goto-object old-object)
+                  (let ((keymap (get-text-property (point) 'keymap))
+                        (start (point)))
+                    (delete-line)
+                    (vtable--insert-line table line line-number
+                                         (nth 1 (vtable--cache table))
+                                         (vtable--spacer table))
+                    (add-text-properties start (point) (list 'keymap keymap
+                                                             'vtable table))))
+                ;; We may have inserted a non-numerical value into a previously
+                ;; all-numerical table, so recompute.
+                (vtable--recompute-numerical table (cdr line)))
+            (error "Can't find cached object in vtable"))))
     #'vtable-update-object))
 
 ;;;; Footer
