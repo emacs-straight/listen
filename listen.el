@@ -5,8 +5,8 @@
 ;; Author: Adam Porter <adam@alphapapa.net>
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
-;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13"))
-;; Version: 0.7-pre
+;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3"))
+;; Version: 0.7
 ;; URL: https://github.com/alphapapa/listen.el
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -85,11 +85,21 @@
 Used for mode line lighter and transient menu."
   :type 'natnum)
 
-(defcustom listen-lighter-format 'remaining
-  "Time elapsed/remaining format.
-For the currently playing track."
-  :type '(choice (const :tag "Time remaining" remaining)
-                 (const :tag "Time elapsed/total" elapsed)))
+(defcustom listen-lighter-format "🎵:%s %a: %>15t (%r)%E "
+  "Format for mode line lighter.
+Uses `format-spec', which see.  These format specs are available:
+
+%a: Artist
+%A: Album
+%t: Title
+
+%e: Elapsed time
+%r: Remaining time
+%s: Player status icon
+
+%E: Extra data specified in `listen-lighter-extra-functions',
+ which see."
+  :type 'string)
 
 (defcustom listen-lighter-extra-functions nil
   "Functions to show extra info in the lighter.
@@ -215,41 +225,33 @@ Interactively, jump to current queue's current track."
             (remove lighter global-mode-string)))))
 
 (defun listen-mode-lighter ()
-  "Return lighter for `listen-mode'."
-  (cl-labels ((format-track ()
-                (when-let ((info (listen--info listen-player))
-                           ;; Sometimes when paused/stopped, the artist and/or
-                           ;; title are nil even if info isn't, so we must
-                           ;; check before treating them as strings.
-                           (artist (alist-get "artist" info nil nil #'equal))
-                           (title (alist-get "title" info nil nil #'equal)))
-                  (format "%s: %s" artist
-                          (truncate-string-to-width
-                           title listen-lighter-title-max-length nil nil t))))
-              (format-status ()
-                (pcase (listen--status listen-player)
-                  ("playing" "▶")
-                  ("paused" "⏸")
-                  ("stopped" "■")))
-              (format-extra ()
-                (mapconcat #'funcall listen-lighter-extra-functions " ")))
-    (apply #'concat "🎵:"
-           (if (and (listen--running-p listen-player)
-                    (listen--playing-p listen-player))
-               (list (format-status) " " (format-track)
-                     " ("
-                     (pcase listen-lighter-format
-                       ('remaining (concat "-" (listen-format-seconds (- (listen--length listen-player)
-                                                                         (listen--elapsed listen-player)))))
-                       (_ (concat (listen-format-seconds (listen--elapsed listen-player))
-                                  "/"
-                                  (listen-format-seconds (listen--length listen-player)))))
-                     ")"
-                     (if-let ((extra (format-extra)))
-                         (concat " " extra)
-                       "")
-                     " ")
-             '("■ ")))))
+  "Return lighter for `listen-mode'.
+According to `listen-lighter-format', which see."
+  (if-let (((listen--running-p listen-player))
+           ((listen--playing-p listen-player))
+           (info (listen--info listen-player)))
+      (format-spec listen-lighter-format
+                   `((?a . ,(lambda ()
+                              (alist-get "artist" info nil nil #'equal)))
+                     (?A . ,(lambda ()
+                              (alist-get "album" info nil nil #'equal)))
+                     (?t . ,(lambda ()
+                              (alist-get "title" info nil nil #'equal)))
+                     (?e . ,(lambda ()
+                              (listen-format-seconds (listen--elapsed listen-player))))
+                     (?r . ,(lambda ()
+                              (concat "-" (listen-format-seconds
+                                           (- (listen--length listen-player)
+                                              (listen--elapsed listen-player))))))
+                     (?s . ,(lambda ()
+                              (pcase (listen--status listen-player)
+                                ("playing" "▶")
+                                ("paused" "⏸")
+                                ("stopped" "■"))))
+                     (?E . ,(lambda ()
+                              (if-let ((extra (mapconcat #'funcall listen-lighter-extra-functions " ")))
+                                  (concat " " extra)
+                                "")))))))
 
 (defun listen-lighter-format-rating ()
   "Return the rating of the current track for display in the lighter."
@@ -328,7 +330,6 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
 
 ;; It seems that autoloading the transient prefix command doesn't work
 ;; as expected, so we'll try this workaround.
-;; FIXME(v0.7): This doesn't seem to work either.
 
 ;;;###autoload
 (defalias 'listen #'listen-menu)
