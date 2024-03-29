@@ -6,7 +6,7 @@
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
 ;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3"))
-;; Version: 0.9-pre
+;; Version: 0.10-pre
 ;; URL: https://github.com/alphapapa/listen.el
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -208,6 +208,9 @@ Interactively, jump to current queue's current track."
 ;;;; Mode
 
 (defvar listen-mode-lighter nil)
+;; Setting this symbol property allows faces and display properties to affect the lighter in the
+;; mode line and tab bar.
+(put 'listen-mode-lighter 'risky-local-variable t)
 
 ;;;###autoload
 (define-minor-mode listen-mode
@@ -237,29 +240,37 @@ According to `listen-lighter-format', which see."
              (info (listen--info listen-player)))
     (format-spec listen-lighter-format
                  `((?a . ,(lambda ()
-                            (or (alist-get "artist" info nil nil #'equal) "")))
+                            (propertize (or (alist-get "artist" info nil nil #'equal) "")
+                                        'face 'listen-lighter-artist)))
                    (?A . ,(lambda ()
-                            (or (alist-get "album" info nil nil #'equal) "")))
+                            (propertize (or (alist-get "album" info nil nil #'equal) "")
+                                        'face 'listen-lighter-album)))
                    (?t . ,(lambda ()
                             (if-let ((title (alist-get "title" info nil nil #'equal)))
-                                (truncate-string-to-width title listen-lighter-title-max-length
-                                                          nil nil t)
+                                (propertize
+                                 (truncate-string-to-width title listen-lighter-title-max-length
+                                                           nil nil t)
+                                 'face 'listen-lighter-title)
                               "")))
                    (?e . ,(lambda ()
-                            (listen-format-seconds (listen--elapsed listen-player))))
+                            (propertize (listen-format-seconds (listen--elapsed listen-player))
+                                        'face 'listen-lighter-time)))
                    (?r . ,(lambda ()
-                            (concat "-" (listen-format-seconds
-                                         (- (listen--length listen-player)
-                                            (listen--elapsed listen-player))))))
+                            (propertize (concat "-" (listen-format-seconds
+                                                     (- (listen--length listen-player)
+                                                        (listen--elapsed listen-player))))
+                                        'face 'listen-lighter-time)))
                    (?s . ,(lambda ()
-                            (pcase (listen--status listen-player)
-                              ("playing" "▶")
-                              ("paused" "⏸")
-                              ("stopped" "■")
-                              (_ ""))))
+                            (propertize (pcase (listen--status listen-player)
+                                          ("playing" "▶")
+                                          ("paused" "⏸")
+                                          ("stopped" "■")
+                                          (_ ""))
+                                        'face 'bold)))
                    (?E . ,(lambda ()
                             (if-let ((extra (mapconcat #'funcall listen-lighter-extra-functions " ")))
-                                (concat " " extra)
+                                (propertize (concat " " extra)
+                                            'face 'listen-lighter-extra)
                               "")))))))
 
 (defun listen-lighter-format-rating ()
@@ -337,10 +348,10 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
 
 (defvar listen-queue-repeat-mode)
 
-;; It seems that autoloading the transient prefix command doesn't work
-;; as expected, so we'll try this workaround.
+;; TODO(someday): Simplify autoload when requiring Emacs 30.  See
+;; <https://github.com/magit/transient/issues/280>.
 
-;;;###autoload
+;;;###autoload (autoload 'listen-menu "listen" nil t)
 (transient-define-prefix listen-menu ()
   "Show Listen menu."
   :info-manual "(listen)"
