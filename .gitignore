@@ -1,7 +1,0 @@
-*.elc
-/scratch.el
-/makem.sh
-/.sandbox/
-/.NOTES/
-*.texi
-*.info
