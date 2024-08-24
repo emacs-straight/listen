@@ -43,11 +43,14 @@
 ;;;; Functions
 
 (cl-defmethod listen--info ((player listen-player-mpv))
-  (map-apply (lambda (key value)
-               ;; TODO: Consider using symbols as keys (VLC returns strings, MPV's decodes as
-               ;; symbols).
-               (cons (downcase (symbol-name key)) value))
-             (listen-mpv--get-property player "metadata")))
+  "Return metadata from MPV PLAYER, or nil if a track is not playing."
+  ;; If the metadata property isn't available, ignore the error.
+  (when-let ((metadata (ignore-errors (listen-mpv--get-property player "metadata"))))
+    (map-apply (lambda (key value)
+                 ;; TODO: Consider using symbols as keys (VLC returns strings, MPV's decodes as
+                 ;; symbols).
+                 (cons (downcase (symbol-name key)) value))
+               metadata)))
 
 (cl-defmethod listen--filename ((player listen-player-mpv))
   "Return filename of PLAYER's current track."
@@ -64,14 +67,19 @@
                (socket (make-temp-name (expand-file-name "listen-mpv-socket-" temporary-file-directory)))
                (args (append args (list (format "--input-ipc-server=%s" socket)))))
     (unless (process-live-p process)
-      (setf (listen-player-process player)
-            (apply #'start-process "listen-player-mpv" (generate-new-buffer " *listen-player-mpv*")
-                   command args))
-      (sleep-for 1)
-      (setf (map-elt (listen-player-etc player) :network-process)
-            (make-network-process :name "listen-player-mpv-socket" :family 'local
-                                  :remote socket :noquery t
-                                  :buffer (generate-new-buffer " *listen-player-mpv-socket*")))
+      (let ((process-buffer (generate-new-buffer " *listen-player-mpv*"))
+            (socket-buffer (generate-new-buffer " *listen-player-mpv-socket*")))
+        (buffer-disable-undo process-buffer)
+        (buffer-disable-undo socket-buffer)
+        (setf (listen-player-process player)
+              (apply #'start-process "listen-player-mpv" process-buffer
+                     command args))
+        ;; FIXME: Test in a short loop rather than just sleeping for a second.
+        (sleep-for 1)
+        (setf (map-elt (listen-player-etc player) :network-process)
+              (make-network-process :name "listen-player-mpv-socket" :family 'local
+                                    :remote socket :noquery t
+                                    :buffer socket-buffer)))
       (set-process-query-on-exit-flag (listen-player-process player) nil))))
 
 (cl-defmethod listen--play ((player listen-player-mpv) file)
@@ -120,18 +128,45 @@ Stops playing, clears playlist, adds FILE, and plays it."
     (with-current-buffer (process-buffer network-process)
       (let ((json (json-encode `(("command" ,command ,@args)
                                  ("request_id" . ,request-id)))))
+        ;; (message "SENDING: %S" json)
         (process-send-string network-process json)
         (process-send-string network-process "\n")
+        (goto-char (point-max))
         (with-local-quit
           (accept-process-output network-process 2))
-        (goto-char (point-min))
-        (let ((json-false nil))
-          (prog1 (cl-loop for result = (json-read)
-                          while result
-                          when (equal request-id (map-elt result 'request_id))
-                          return result)
-            (unless listen-debug-p
-              (erase-buffer))))))))
+        (save-excursion
+          (goto-char (point-min))
+          (let ((json-false nil))
+            (cl-loop
+             ;; do (message "BUFFER-CONTENTS:%S  POS:%s  BUFFER-SIZE:%s  EOBP:%s"
+             ;;             (buffer-string) (point) (buffer-size) (eobp))
+             until (or (eobp) (looking-at-p (rx (0+ space) eos)))
+             for start-pos = (point)
+             for result = (condition-case-unless-debug err
+                              (json-read)
+                            (error
+                             (error "listen--send: JSON-READ signaled error: %S  BUFFER-CONTENTS:%S  POS:%s  BUFFER-SIZE:%s  EOBP:%s"
+                                    err (buffer-string) (point) (buffer-size) (eobp))))
+             while result
+             for value = (pcase (map-elt result 'request_id)
+                           ((pred (equal request-id))
+                            ;; Event is the one we're looking for: delete the event from the
+                            ;; buffer and return it.
+                            (unless listen-debug-p
+                              (delete-region start-pos (point)))
+                            result)
+                           ('nil
+                            ;; Event has no request ID: delete it from the buffer.
+                            (unless listen-debug-p
+                              (delete-region start-pos (point)))
+                            nil)
+                           (_
+                            ;; Event is for a different request: ignore it (this probably
+                            ;; won't happen in practice, since we process commands
+                            ;; synchronously, but it's good to be careful).
+                            nil))
+             when value
+             return value)))))))
 
 (cl-defmethod listen--seek ((player listen-player-mpv) seconds)
   "Seek PLAYER to SECONDS."
