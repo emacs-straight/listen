@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;; Library functions for Listen.
 
 ;;; Code:
 
@@ -135,8 +135,6 @@ return a list of values; otherwise return the sole value."
 (defface listen-lighter-extra '((t :inherit font-lock-comment-face))
   "See `listen-lighter-extra-functions'.")
 
-
-
 ;;;; Functions
 
 (defun listen-current-player ()
@@ -154,7 +152,7 @@ return a list of values; otherwise return the sole value."
 
 (defun listen-format-seconds (seconds)
   "Return SECONDS formatted as an hour:minute:second-style duration."
-  (format-seconds "%h:%z%.2m:%.2s" seconds))
+  (format-seconds "%h:%z%m:%.2s" seconds))
 
 ;;;; Methods
 
