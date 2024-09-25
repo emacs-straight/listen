@@ -141,10 +141,10 @@ Interactively, uses the default player."
     (setf listen-player nil))
   (listen-mode--update))
 
-(declare-function listen-queue-next "listen-queue")
 (defun listen-next (player)
   "Play next track in PLAYER's queue.
 Interactively, uses the default player."
+  (declare-function listen-queue-next "listen-queue")
   (interactive (list (listen-current-player)))
   (listen-queue-next (map-elt (listen-player-etc player) :queue)))
 
@@ -293,12 +293,12 @@ According to `listen-lighter-format', which see."
     (unless (equal "-1" rating)
       (format "[%s]" (* 5 (string-to-number rating))))))
 
-(declare-function listen-queue-play "listen-queue")
-(declare-function listen-queue-next-track "listen-queue")
 (defun listen-mode--update (&rest _ignore)
   "Play next track and/or update variable `listen-mode-lighter'."
+  (declare-function listen-queue-play "listen-queue")
+  (declare-function listen-queue-next-track "listen-queue")
   (let (playing-next-p)
-    (when listen-player
+    (when (and listen-player (listen--running-p listen-player))
       (unless (or (listen--playing-p listen-player)
                   ;; HACK: It seems that sometimes the player gets restarted
                   ;; even when paused: this extra check should prevent that.
