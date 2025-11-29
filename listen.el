@@ -144,8 +144,8 @@ Interactively, uses the default player."
 (defun listen-next (player)
   "Play next track in PLAYER's queue.
 Interactively, uses the default player."
-  (declare-function listen-queue-next "listen-queue")
   (interactive (list (listen-current-player)))
+  (declare-function listen-queue-next "listen-queue")
   (listen-queue-next (map-elt (listen-player-etc player) :queue)))
 
 (defun listen-pause (player)
@@ -394,8 +394,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
           listen-player)
     :description
     (lambda ()
-      (if listen-player
-          (format "Volume: %.0f%%" (listen--volume listen-player))
+      (if-let ((listen-player)
+               (volume (listen--volume listen-player)))
+          (format "Volume: %.0f%%" volume)
         "Volume: N/A"))
     ("=" "Set" listen-volume)
     ("v" "Down" (lambda ()

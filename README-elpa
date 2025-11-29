@@ -469,8 +469,16 @@ v0.10-pre
     MPV being preferred due to more robust IPC support.)
   • Faces for parts of mode line lighter.
 
+  *Changes*
+  • Improve performance of adding large numbers of tracks to large
+    queues (using a hash table for deduplication).
+
   *Fixes*
+  • Playing next track in queue after current track has been removed.
+  • Command `listen-queue-goto-current' automatically shows the queue's
+    buffer.
   • Updating vtables for Emacs versions before 30.
+  • Minor fixes for Emacs 30 compatibility.
 
 
 [MPV] <https://mpv.io/>

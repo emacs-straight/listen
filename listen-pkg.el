@@ -1,2 +1,2 @@
-;; Generated package description from listen.el  -*- no-byte-compile: t -*-
-(define-package "listen" "0.10pre0.20240923.201649" "Audio/Music player" '((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3")) :commit "69432d45b9654e4a9592e229b0315fd446390e1b" :authors '(("Adam Porter" . "adam@alphapapa.net")) :maintainer '("Adam Porter" . "adam@alphapapa.net") :keywords '("multimedia") :url "https://github.com/alphapapa/listen.el")
+;; Generated package description from listen.el  -*- mode: lisp-data; no-byte-compile: t -*-
+(define-package "listen" "0.10pre0.20251123.212313" "Audio/Music player" '((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3")) :commit "9d8825a2ff776a127c12ba2e968a0c43a8b99e5c" :authors '(("Adam Porter" . "adam@alphapapa.net")) :maintainer '("Adam Porter" . "adam@alphapapa.net") :keywords '("multimedia") :url "https://github.com/alphapapa/listen.el")
