@@ -461,7 +461,10 @@ v0.10-pre
 ─────────
 
   *Additions*
-  • [MPV] support.
+  • [MPV] support (works asynchronously, to improve performance and
+    avoid blocking Emacs).
+  • Command `listen-status', which shows a status buffer (contributions
+    to it are welcome).
   • Command `listen-queue-add-tracks', when used in a Dired buffer, uses
     the marked files or the one at point.
   • Option `listen-backend', which sets the backend to use: MPV or VLC.
